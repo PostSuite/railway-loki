@@ -26,6 +26,7 @@ query_range:
         max_size_mb: 100
 
 limits_config:
+  retention_period: 168h
   allow_structured_metadata: true
 
 schema_config:
