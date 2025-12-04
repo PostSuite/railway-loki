@@ -1,5 +1,7 @@
 FROM grafana/loki:latest
 
+USER root
+
 # Copy a custom Loki configuration file
 COPY loki-config.yaml /etc/loki/loki-config.yaml
 
