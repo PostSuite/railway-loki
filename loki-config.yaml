@@ -6,7 +6,6 @@ server:
   grpc_server_max_concurrent_streams: 1000
   log_level: info
   log_format: json
-  log_output: stdout
 
 common:
   instance_addr: "::"
