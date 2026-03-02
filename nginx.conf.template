@@ -1,0 +1,35 @@
+worker_processes 1;
+error_log /dev/stderr warn;
+pid /tmp/nginx.pid;
+
+events {
+    worker_connections 128;
+}
+
+http {
+    access_log /dev/stdout;
+
+    server {
+        listen ${PORT};
+
+        # Health check — no auth required (Railway needs this)
+        location = /ready {
+            proxy_pass http://127.0.0.1:3100/ready;
+        }
+
+        # All other requests require bearer token
+        location / {
+            # Check Authorization header against the secret token
+            set $expected "Bearer ${AUTH_TOKEN}";
+            if ($http_authorization != $expected) {
+                return 401 '{"error": "unauthorized"}';
+            }
+
+            proxy_pass http://127.0.0.1:3100;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 300s;
+            proxy_send_timeout 300s;
+        }
+    }
+}

@@ -2,11 +2,16 @@ FROM grafana/loki:latest
 
 USER root
 
-# Copy a custom Loki configuration file
+# Install nginx and envsubst
+RUN apk add --no-cache nginx gettext
+
+# Copy configs
 COPY loki-config.yaml /etc/loki/loki-config.yaml
+COPY nginx.conf.template /etc/nginx/nginx.conf.template
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-# Expose necessary ports
-EXPOSE 3100 9096
+# Railway provides $PORT — nginx listens there, proxies to Loki on 3100
+EXPOSE 3100
 
-# Set the command to run Loki with the specified configuration
-CMD ["-config.file=/etc/loki/loki-config.yaml"]
+ENTRYPOINT ["/entrypoint.sh"]
