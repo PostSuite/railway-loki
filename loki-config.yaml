@@ -55,6 +55,16 @@ schema_config:
 pattern_ingester:
   enabled: true
 
+ingester:
+  # Mobile log uploads arrive with capture-time timestamps that can lag
+  # wall-clock by many hours when a device syncs late. The ingester's accept
+  # window for out-of-order entries is max_chunk_age/2, so 48h gives a 24h
+  # tolerance for delayed mobile sync — covers the worst observed rejection
+  # (~19h stale) with headroom. Default is 2h (= 1h window). Memory cost is
+  # negligible: chunks still flush on chunk_target_size (1.5 MB) and
+  # chunk_idle_period (30m), so max_chunk_age only affects low-rate streams.
+  max_chunk_age: 48h
+
 ruler:
   alertmanager_url: http://localhost:9093
 
