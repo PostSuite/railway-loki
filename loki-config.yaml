@@ -41,6 +41,11 @@ limits_config:
             - environment
             - runtime
   reject_old_samples: false
+  # Mobile log uploads arrive with capture-time timestamps that can lag
+  # wall-clock by many hours when a device syncs late. Default max_chunk_age
+  # (2h) drops those entries as "entry too far behind". 48h gives the upload
+  # pipeline a realistic window for delayed mobile sync.
+  max_chunk_age: 48h
 
 schema_config:
   configs:
