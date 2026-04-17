@@ -20,17 +20,33 @@ common:
       store: inmemory
 
 query_range:
+  # cache_results defaults to false, which means the embedded results_cache
+  # below is allocated but never consulted. align_queries_with_step makes
+  # near-identical dashboard queries hash to the same cache key instead of
+  # missing because their step boundaries differ by milliseconds.
+  cache_results: true
+  align_queries_with_step: true
   results_cache:
     cache:
       embedded_cache:
         enabled: true
-        max_size_mb: 100
+        # Default is ~1GB. Was capped at 100MB which made eviction
+        # aggressive on a workload with many distinct queries.
+        max_size_mb: 1024
 
 limits_config:
   retention_period: 168h
   max_entries_limit_per_query: 50000
   allow_structured_metadata: true
   discover_service_name: []
+  # Query parallelism. The Loki container runs on 4 vCPU and was sitting
+  # near-idle on CPU with ~8GB RAM used during cold queries — work was
+  # serialized at querier.max_concurrent (see below). Smaller split
+  # interval (default 30m → 10m) creates more sub-queries per range query
+  # so the bumped concurrency is actually consumed.
+  split_queries_by_interval: 10m
+  max_query_parallelism: 64           # default 32
+  tsdb_max_query_parallelism: 256     # default 128
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -54,6 +70,15 @@ schema_config:
 
 pattern_ingester:
   enabled: true
+
+querier:
+  # Default is 10 concurrent sub-queries per querier process — this was the
+  # binding bottleneck on cold queries: the frontend was splitting queries
+  # into many shards that then queued waiting for a worker slot, leaving
+  # CPU idle. frontend_worker.match_max_concurrent (default true since
+  # Loki 2.5) makes this also raise the frontend→querier worker count.
+  # 32 leaves headroom on the 4 vCPU box; raise to 64 if CPU still idle.
+  max_concurrent: 32
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
