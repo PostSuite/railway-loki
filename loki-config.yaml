@@ -35,7 +35,7 @@ storage_config:
   # (chunks ingested before 2026-04-21) stays readable from
   # `/loki/chunks`. Removed from `common.storage` because S3 is now the
   # default for new writes; this `storage_config.filesystem` is referenced
-  # only by the old schema entry. After ~2026-04-28 (7-day retention
+  # only by the old schema entry. After ~2026-05-20 (30-day retention
   # rollover) this block can also be removed.
   filesystem:
     directory: /loki/chunks
@@ -56,7 +56,10 @@ query_range:
         max_size_mb: 1024
 
 limits_config:
-  retention_period: 168h
+  # 30-day retention. Compactor below actually enforces it (the previous
+  # value of 168h was set on limits_config but `compactor.retention_enabled`
+  # was unset, so retention was advertised but never deleted anything).
+  retention_period: 720h
   max_entries_limit_per_query: 50000
   allow_structured_metadata: true
   discover_service_name: []
@@ -89,8 +92,8 @@ limits_config:
 schema_config:
   configs:
     # Old chunks live on the filesystem volume (`/loki/chunks`). They stay
-    # readable from this schema entry until the 7-day retention window rolls
-    # them out (~2026-04-28). After that the entry can be removed.
+    # readable from this schema entry until the 30-day retention window
+    # rolls them out (~2026-05-20). After that the entry can be removed.
     - from: 2020-10-24
       store: tsdb
       object_store: filesystem
@@ -132,7 +135,27 @@ ingester:
   max_chunk_age: 48h
 
 ruler:
+  # Pin ruler files to the filesystem volume explicitly. Was previously
+  # inheriting from `common.storage.filesystem.rules_directory`; that
+  # block went away when we switched the chunk default to S3, and the
+  # ruler doesn't have its own S3 config here so we declare it locally.
+  storage:
+    type: local
+    local:
+      directory: /loki/rules
   alertmanager_url: http://localhost:9093
+
+compactor:
+  # Actually enforce `limits_config.retention_period`. Without this block
+  # the compactor runs but never deletes — the previous 168h retention
+  # setting was advertised but inert. `delete_request_store: s3` keeps
+  # the compactor's own delete-tracking data on the same backend as new
+  # chunks, so the filesystem volume stays read-only for legacy data.
+  working_directory: /loki/compactor
+  retention_enabled: true
+  retention_delete_delay: 2h
+  retention_delete_worker_count: 150
+  delete_request_store: s3
 
 frontend:
   encoding: protobuf
