@@ -68,9 +68,16 @@ limits_config:
   # serialized at querier.max_concurrent (see below). Smaller split
   # interval (default 30m → 10m) creates more sub-queries per range query
   # so the bumped concurrency is actually consumed.
+  #
+  # `tsdb_max_query_parallelism` temporarily back to Loki default (128)
+  # while filesystem chunk reads still pin OS threads — combined with
+  # max_concurrent: 16 below this caps peak parallel chunk readers at
+  # ~2048 (vs the ~8192 that crashed at PR #6 settings). After the
+  # 2026-04-21 schema cutover S3 takes over, chunk reads go non-blocking,
+  # and we can revert this back to 256.
   split_queries_by_interval: 10m
   max_query_parallelism: 64           # default 32
-  tsdb_max_query_parallelism: 256     # default 128
+  tsdb_max_query_parallelism: 128     # was 256; temporarily back to default
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -116,13 +123,17 @@ pattern_ingester:
   enabled: true
 
 querier:
-  # Default is 10 concurrent sub-queries per querier process — this was the
-  # binding bottleneck on cold queries: the frontend was splitting queries
-  # into many shards that then queued waiting for a worker slot, leaving
-  # CPU idle. frontend_worker.match_max_concurrent (default true since
-  # Loki 2.5) makes this also raise the frontend→querier worker count.
-  # 32 leaves headroom on the 4 vCPU box; raise to 64 if CPU still idle.
-  max_concurrent: 32
+  # Default is 10. PR #6 set this to 32 to unblock cold-query performance,
+  # but at 32 with filesystem chunk storage the runtime hits Go's OS-thread
+  # cap (1024) within ~42h: each blocked syscall pins a goroutine to a
+  # thread and they pile up faster than they retire.
+  #
+  # 16 is a compromise: 60% above Loki default for perf, 50% below the
+  # value that crashed for safety (~2048 peak parallel chunk readers vs
+  # ~8192 at the crashing setting). After the 2026-04-21 S3 cutover,
+  # chunk reads become non-blocking HTTP and we can revert to 32 (or
+  # higher).
+  max_concurrent: 16
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
