@@ -14,6 +14,17 @@ fi
 # Render nginx config with env vars
 envsubst '${PORT} ${AUTH_TOKEN}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
+# Strip the protocol scheme from S3_ENDPOINT. Railway populates the bucket
+# variable as a full URL (e.g. `https://t3.storageapi.dev`) but Loki's S3
+# client wants a hostname only — HTTPS is controlled separately by
+# `insecure: false` in loki-config.yaml. Doing it here lets the Railway
+# env var stay as a clean `${{"Loki Bucket".ENDPOINT}}` reference.
+if [ -n "$S3_ENDPOINT" ]; then
+  S3_ENDPOINT="${S3_ENDPOINT#https://}"
+  S3_ENDPOINT="${S3_ENDPOINT#http://}"
+  export S3_ENDPOINT
+fi
+
 # Start Loki in the background.
 # `-config.expand-env=true` lets the YAML reference Railway env vars via
 # `${VAR}` syntax (used for the S3 credentials/endpoint/bucket).
