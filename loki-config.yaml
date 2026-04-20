@@ -6,6 +6,13 @@ server:
   grpc_server_max_concurrent_streams: 1000
   log_level: info
   log_format: json
+  # Default for both is 30s. The write timeout caps how long Loki has to
+  # finish writing a response — anything longer (e.g. cold 24h+ correlate
+  # queries) gets cut off mid-stream regardless of upstream timeouts.
+  # Match the nginx (`proxy_read_timeout 300s`) and Grafana
+  # (`GF_DATAPROXY_TIMEOUT=300`) ceilings so the whole chain is consistent.
+  http_server_read_timeout: 5m
+  http_server_write_timeout: 5m
 
 common:
   instance_addr: "::"
@@ -95,6 +102,12 @@ limits_config:
   # across all log streams.
   discover_log_levels: false
   reject_old_samples: false
+  # Per-sub-query timeout (default 1m). With `split_queries_by_interval: 10m`
+  # a 24h range becomes ~144 sub-queries fanned out in parallel; the default
+  # 1m is enough for hot/cached chunks but a single cold 10m chunk on
+  # filesystem storage can run longer. 3m gives headroom while staying well
+  # under the 5m `http_server_write_timeout` ceiling above.
+  query_timeout: 3m
 
 schema_config:
   configs:
