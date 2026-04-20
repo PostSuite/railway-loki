@@ -6,13 +6,14 @@ server:
   grpc_server_max_concurrent_streams: 1000
   log_level: info
   log_format: json
-  # Default for both is 30s. The write timeout caps how long Loki has to
-  # finish writing a response — anything longer (e.g. cold 24h+ correlate
-  # queries) gets cut off mid-stream regardless of upstream timeouts.
-  # Match the nginx (`proxy_read_timeout 300s`) and Grafana
-  # (`GF_DATAPROXY_TIMEOUT=300`) ceilings so the whole chain is consistent.
-  http_server_read_timeout: 5m
-  http_server_write_timeout: 5m
+  # Defaults are 30s/30s. The write timeout caps how long Loki has to finish
+  # writing a response — anything longer (e.g. cold 24h+ correlate queries)
+  # gets cut off mid-stream regardless of upstream timeouts. 15m gives
+  # pre-S3-cutover wide-window queries (3d/7d) room to complete slowly under
+  # reduced parallelism (see querier/limits below). Matches nginx and
+  # Grafana ceilings (also bumped to 900s).
+  http_server_read_timeout: 15m
+  http_server_write_timeout: 15m
 
 common:
   instance_addr: "::"
@@ -82,7 +83,11 @@ limits_config:
   # ~2048 (vs the ~8192 that crashed at PR #6 settings). After the
   # 2026-04-21 schema cutover S3 takes over, chunk reads go non-blocking,
   # and we can revert this back to 256.
-  split_queries_by_interval: 10m
+  # 30m sub-queries (was 10m) cut sub-query count 3× per range query, so
+  # wide windows (3d/7d) generate fewer goroutines to recycle. Each
+  # sub-query does proportionally more work but query_timeout: 3m below
+  # gives them time to complete.
+  split_queries_by_interval: 30m
   max_query_parallelism: 64           # default 32
   tsdb_max_query_parallelism: 128     # was 256; temporarily back to default
   otlp_config:
@@ -102,11 +107,10 @@ limits_config:
   # across all log streams.
   discover_log_levels: false
   reject_old_samples: false
-  # Per-sub-query timeout (default 1m). With `split_queries_by_interval: 10m`
-  # a 24h range becomes ~144 sub-queries fanned out in parallel; the default
-  # 1m is enough for hot/cached chunks but a single cold 10m chunk on
-  # filesystem storage can run longer. 3m gives headroom while staying well
-  # under the 5m `http_server_write_timeout` ceiling above.
+  # Per-sub-query timeout (default 1m). At split=30m a single sub-query has
+  # to chew through more chunks; 3m lets cold filesystem-backed sub-queries
+  # complete without failing. Bounded by max_concurrent below so blocked
+  # goroutines can't accumulate past the OS thread cap.
   query_timeout: 3m
 
 schema_config:
@@ -136,17 +140,16 @@ pattern_ingester:
   enabled: true
 
 querier:
-  # Default is 10. PR #6 set this to 32 to unblock cold-query performance,
-  # but at 32 with filesystem chunk storage the runtime hits Go's OS-thread
-  # cap (1024) within ~42h: each blocked syscall pins a goroutine to a
-  # thread and they pile up faster than they retire.
+  # Default is 10. Halved again to 8 (was 16) after a 7d cold query crashed
+  # Loki on 2026-04-20: the 3m query_timeout above lets blocked goroutines
+  # linger 3× longer than the 1m default, and 1008 sub-queries from a 7d
+  # range pushed peak threads past the 1024 cap.
   #
-  # 16 is a compromise: 60% above Loki default for perf, 50% below the
-  # value that crashed for safety (~2048 peak parallel chunk readers vs
-  # ~8192 at the crashing setting). After the 2026-04-21 S3 cutover,
-  # chunk reads become non-blocking HTTP and we can revert to 32 (or
-  # higher).
-  max_concurrent: 16
+  # 8 × ~30 chunk-fetch parallelism per sub-query ≈ 240 peak threads,
+  # comfortably under the cap even with the 3m timeout. After the
+  # 2026-04-21 S3 cutover chunk reads become non-blocking HTTP and we can
+  # revert to 16 or higher.
+  max_concurrent: 8
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
