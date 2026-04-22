@@ -17,11 +17,15 @@ http {
             proxy_pass http://127.0.0.1:3100/ready;
         }
 
-        # All other requests require bearer token
+        # All other requests require a recognized credential. Either:
+        #   Authorization: Bearer $AUTH_TOKEN          (backend services)
+        #   x-api-key: $MODAL_AUTH_TOKEN               (Modal OTEL integration)
+        # Distinct tokens so Modal can be rotated independently.
         location / {
-            # Check Authorization header against the secret token
-            set $expected "Bearer ${AUTH_TOKEN}";
-            if ($http_authorization != $expected) {
+            set $auth_ok 0;
+            if ($http_authorization = "Bearer ${AUTH_TOKEN}") { set $auth_ok 1; }
+            if ($http_x_api_key = "${MODAL_AUTH_TOKEN}") { set $auth_ok 1; }
+            if ($auth_ok = 0) {
                 return 401 '{"error": "unauthorized"}';
             }
 
