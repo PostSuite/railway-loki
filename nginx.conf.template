@@ -17,19 +17,22 @@ http {
             proxy_pass http://127.0.0.1:3100/ready;
         }
 
-        # All other requests require a recognized credential. Either:
-        #   Authorization: Bearer $AUTH_TOKEN          (backend services)
-        #   api-key: $MODAL_AUTH_TOKEN                 (Modal OTEL integration)
-        # Matches Modal's documented OTEL_HEADER_api-key convention. Note:
-        # header names with underscores are dropped by nginx by default
-        # (underscores_in_headers off), so the Modal header must stay
-        # hyphenated — created via Modal's UI OpenTelemetry Secret template,
-        # not the CLI (which rejects hyphens in secret keys).
-        # Distinct tokens so Modal can be rotated independently.
+        # All other requests require a bearer token.
+        #
+        # Modal OTEL path (disabled 2026-04-22, may be re-enabled). To restore:
+        #   1. uncomment the `api-key` check below;
+        #   2. set MODAL_AUTH_TOKEN on the Loki Railway service;
+        #   3. add ${MODAL_AUTH_TOKEN} back to envsubst in entrypoint.sh;
+        #   4. create the Modal secret via the UI OpenTelemetry Secret
+        #      template (CLI rejects hyphenated keys) with key
+        #      `OTEL_HEADER_api-key` and the MODAL_AUTH_TOKEN value.
+        #   Note: nginx drops headers with underscores in the name by default
+        #   (`underscores_in_headers off`), so the Modal header must stay
+        #   hyphenated (`api-key`, not `x_api_key`).
         location / {
             set $auth_ok 0;
             if ($http_authorization = "Bearer ${AUTH_TOKEN}") { set $auth_ok 1; }
-            if ($http_api_key = "${MODAL_AUTH_TOKEN}") { set $auth_ok 1; }
+            # if ($http_api_key = "${MODAL_AUTH_TOKEN}") { set $auth_ok 1; }
             if ($auth_ok = 0) {
                 return 401 '{"error": "unauthorized"}';
             }

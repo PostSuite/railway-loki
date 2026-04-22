@@ -96,8 +96,6 @@ limits_config:
       attributes_config:
         - action: index_label
           attributes:
-            - service.name
-            - deployment.environment
             - service
             - environment
             - runtime
