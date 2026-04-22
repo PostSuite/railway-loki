@@ -7,7 +7,14 @@ events {
 }
 
 http {
-    access_log /dev/stdout;
+    # TEMP: capture auth headers to diagnose Modal 401s. Revert after
+    # confirmation. Full header values land in Railway logs (operator-only),
+    # still revert promptly.
+    log_format debug_auth '$remote_addr "$request" $status '
+                          'x-api-key="$http_x_api_key" '
+                          'authorization="$http_authorization" '
+                          'ua="$http_user_agent"';
+    access_log /dev/stdout debug_auth;
 
     server {
         listen ${PORT};
