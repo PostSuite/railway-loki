@@ -91,16 +91,16 @@ limits_config:
   max_query_parallelism: 64           # default 32
   tsdb_max_query_parallelism: 128     # was 256; temporarily back to default
   otlp_config:
-  resource_attributes:
-    ignore_defaults: true
-    attributes_config:
-      - action: index_label
-        attributes:
-          - service.name
-          - deployment.environment
-          - service
-          - environment
-          - runtime
+    resource_attributes:
+      ignore_defaults: true
+      attributes_config:
+        - action: index_label
+          attributes:
+            - service.name
+            - deployment.environment
+            - service
+            - environment
+            - runtime
   # Suppress Loki's `detected_level` heuristic. With JSON bodies the
   # heuristic is irrelevant (we already have `severity_text` from OTel
   # which is authoritative), and on plain-text backend bodies it
