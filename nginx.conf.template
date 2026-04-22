@@ -7,14 +7,7 @@ events {
 }
 
 http {
-    # TEMP: capture auth headers to diagnose Modal 401s. Revert after
-    # confirmation. Full header values land in Railway logs (operator-only),
-    # still revert promptly.
-    log_format debug_auth '$remote_addr "$request" $status '
-                          'x-api-key="$http_x_api_key" '
-                          'authorization="$http_authorization" '
-                          'ua="$http_user_agent"';
-    access_log /dev/stdout debug_auth;
+    access_log /dev/stdout;
 
     server {
         listen ${PORT};
@@ -26,12 +19,17 @@ http {
 
         # All other requests require a recognized credential. Either:
         #   Authorization: Bearer $AUTH_TOKEN          (backend services)
-        #   x-api-key: $MODAL_AUTH_TOKEN               (Modal OTEL integration)
+        #   api-key: $MODAL_AUTH_TOKEN                 (Modal OTEL integration)
+        # Matches Modal's documented OTEL_HEADER_api-key convention. Note:
+        # header names with underscores are dropped by nginx by default
+        # (underscores_in_headers off), so the Modal header must stay
+        # hyphenated — created via Modal's UI OpenTelemetry Secret template,
+        # not the CLI (which rejects hyphens in secret keys).
         # Distinct tokens so Modal can be rotated independently.
         location / {
             set $auth_ok 0;
             if ($http_authorization = "Bearer ${AUTH_TOKEN}") { set $auth_ok 1; }
-            if ($http_x_api_key = "${MODAL_AUTH_TOKEN}") { set $auth_ok 1; }
+            if ($http_api_key = "${MODAL_AUTH_TOKEN}") { set $auth_ok 1; }
             if ($auth_ok = 0) {
                 return 401 '{"error": "unauthorized"}';
             }
