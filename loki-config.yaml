@@ -99,13 +99,13 @@ limits_config:
             - service
             - environment
             - runtime
-  # Suppress Loki's `detected_level` heuristic. With JSON bodies the
-  # heuristic is irrelevant (we already have `severity_text` from OTel
-  # which is authoritative), and on plain-text backend bodies it
-  # mis-detects (any line containing the word "error" gets level=error
-  # whether or not it's actually an error). One field per line saved
-  # across all log streams.
-  discover_log_levels: false
+  # Backend services emit `severity_text` (OTel) and mobile logs emit
+  # `level` as structured metadata. With explicit fields present, Loki's
+  # field-priority match wins and the body-text heuristic never runs, so
+  # the historical mis-detection concern does not apply. `detected_level`
+  # is the canonical severity field for `fieldy-observe logs --level` and
+  # for Grafana Logs panel coloring.
+  discover_log_levels: true
   reject_old_samples: false
   # Per-sub-query timeout (default 1m). At split=30m a single sub-query has
   # to chew through more chunks; 3m lets cold filesystem-backed sub-queries
