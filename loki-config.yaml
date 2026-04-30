@@ -38,16 +38,6 @@ common:
     kvstore:
       store: inmemory
 
-storage_config:
-  # Keep the filesystem backend declared too so the legacy schema entry
-  # (chunks ingested before 2026-04-21) stays readable from
-  # `/loki/chunks`. Removed from `common.storage` because S3 is now the
-  # default for new writes; this `storage_config.filesystem` is referenced
-  # only by the old schema entry. After ~2026-06-20 (60-day retention
-  # rollover) this block can also be removed.
-  filesystem:
-    directory: /loki/chunks
-
 query_range:
   # cache_results defaults to false, which means the embedded results_cache
   # below is allocated but never consulted. align_queries_with_step makes
@@ -75,21 +65,12 @@ limits_config:
   # near-idle on CPU with ~8GB RAM used during cold queries — work was
   # serialized at querier.max_concurrent (see below). Smaller split
   # interval (default 30m → 10m) creates more sub-queries per range query
-  # so the bumped concurrency is actually consumed.
-  #
-  # `tsdb_max_query_parallelism` temporarily back to Loki default (128)
-  # while filesystem chunk reads still pin OS threads — combined with
-  # max_concurrent: 16 below this caps peak parallel chunk readers at
-  # ~2048 (vs the ~8192 that crashed at PR #6 settings). After the
-  # 2026-04-21 schema cutover S3 takes over, chunk reads go non-blocking,
-  # and we can revert this back to 256.
-  # 30m sub-queries (was 10m) cut sub-query count 3× per range query, so
-  # wide windows (3d/7d) generate fewer goroutines to recycle. Each
-  # sub-query does proportionally more work but query_timeout: 3m below
-  # gives them time to complete.
-  split_queries_by_interval: 30m
+  # so the bumped concurrency is actually consumed. Chunks are now S3-
+  # only, so chunk fetches are non-blocking HTTP and don't pin OS threads
+  # — values back to PR #6 levels.
+  split_queries_by_interval: 10m
   max_query_parallelism: 64           # default 32
-  tsdb_max_query_parallelism: 128     # was 256; temporarily back to default
+  tsdb_max_query_parallelism: 256     # default 128
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -115,19 +96,9 @@ limits_config:
 
 schema_config:
   configs:
-    # Old chunks live on the filesystem volume (`/loki/chunks`). They stay
-    # readable from this schema entry until the 60-day retention window
-    # rolls them out (~2026-06-20). After that the entry can be removed.
-    - from: 2020-10-24
-      store: tsdb
-      object_store: filesystem
-      schema: v13
-      index:
-        prefix: index_
-        period: 24h
-    # 2026-04-21 onward: new chunks AND TSDB indexes land in Tigris (S3).
-    # Different `index.prefix` keeps the on-S3 index files separate from
-    # the legacy on-disk ones, so the two backends don't collide.
+    # All chunks and TSDB indexes live in Tigris (S3). Pre-2026-04-21
+    # filesystem chunks were deleted along with the legacy schema entry —
+    # queries against earlier time ranges return empty.
     - from: 2026-04-21
       store: tsdb
       object_store: s3
@@ -140,16 +111,9 @@ pattern_ingester:
   enabled: true
 
 querier:
-  # Default is 10. Halved again to 8 (was 16) after a 7d cold query crashed
-  # Loki on 2026-04-20: the 3m query_timeout above lets blocked goroutines
-  # linger 3× longer than the 1m default, and 1008 sub-queries from a 7d
-  # range pushed peak threads past the 1024 cap.
-  #
-  # 8 × ~30 chunk-fetch parallelism per sub-query ≈ 240 peak threads,
-  # comfortably under the cap even with the 3m timeout. After the
-  # 2026-04-21 S3 cutover chunk reads become non-blocking HTTP and we can
-  # revert to 16 or higher.
-  max_concurrent: 8
+  # Default is 10. With chunks S3-only, chunk fetches are non-blocking
+  # HTTP and don't pin OS threads — back to PR #6 level.
+  max_concurrent: 32
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
