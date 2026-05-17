@@ -33,6 +33,18 @@ common:
       region: auto
       s3forcepathstyle: true
       insecure: false
+      http_config:
+        # Default is 1m30s. Loki's legacy S3 client uses Go's
+        # http.Transport defaults under the hood — MaxIdleConnsPerHost
+        # is 2, so once a burst of concurrent chunk GETs finishes, all
+        # but 2 connections to Tigris go straight to TIME_WAIT. The
+        # next burst pays a TLS handshake on every new conn. 5m keeps
+        # the conns we DO have alive across consecutive correlate
+        # sub-query batches in the same session, partially mitigating
+        # the handshake tax. The proper fix is migrating to
+        # use_thanos_objstore: true (exposes max-idle-connections-
+        # per-host); tracked separately. Zero memory cost.
+        idle_conn_timeout: 5m
   replication_factor: 1
   ring:
     kvstore:
@@ -61,16 +73,20 @@ limits_config:
   max_entries_limit_per_query: 50000
   allow_structured_metadata: true
   discover_service_name: []
-  # Query parallelism. The Loki container runs on 4 vCPU and was sitting
-  # near-idle on CPU with ~8GB RAM used during cold queries — work was
-  # serialized at querier.max_concurrent (see below). Smaller split
-  # interval (default 30m → 10m) creates more sub-queries per range query
-  # so the bumped concurrency is actually consumed. Chunks are now S3-
-  # only, so chunk fetches are non-blocking HTTP and don't pin OS threads
-  # — values back to PR #6 levels.
+  # Frontend fan-out caps. These bound the queue depth the query
+  # frontend will produce per range query — they do NOT control
+  # concurrent execution (that's querier.max_concurrent below) and do
+  # NOT participate in the memory pressure that OOMed PR #11. Queued
+  # sub-query state is KBs each; completed results buffered for merge
+  # are ~3 KB each (the Wds9iTu 24h correlate JSON output was 417 KB
+  # across 144 sub-queries). tsdb_max_query_parallelism=256 was
+  # actively constraining 7d range queries (1008 sub-queries → 4
+  # sequential frontend rounds at the previous cap); 1024 lets them
+  # queue all at once. max_query_parallelism is the per-tenant cap;
+  # uniform with the tsdb knob.
   split_queries_by_interval: 10m
-  max_query_parallelism: 64           # default 32
-  tsdb_max_query_parallelism: 256     # default 128
+  max_query_parallelism: 256          # default 32
+  tsdb_max_query_parallelism: 1024    # default 128
   otlp_config:
     resource_attributes:
       ignore_defaults: true
