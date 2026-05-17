@@ -1,6 +1,14 @@
 auth_enabled: false
 
 server:
+  # Railway's internal DNS resolves loki.railway.internal to AAAA-only ULA
+  # addresses (fd12::/16). Without `*_listen_address: "::"`, both HTTP and
+  # gRPC listeners default to 0.0.0.0 (IPv4 wildcard) and peer SYNs to the
+  # IPv6 ULA hang for 10s — the failure mode behind the OTLP-log exporter
+  # ConnectTimeouts from fieldy-core-api. Dual-stacking is the matching
+  # fix to the Tempo bind change (fuckme PR for tempo.yaml).
+  http_listen_address: "::"
+  grpc_listen_address: "::"
   http_listen_port: 3100
   grpc_listen_port: 9096
   grpc_server_max_concurrent_streams: 1000
