@@ -33,6 +33,18 @@ common:
       region: auto
       s3forcepathstyle: true
       insecure: false
+      http_config:
+        # Default is 1m30s. Loki's legacy S3 client uses Go's
+        # http.Transport defaults under the hood — MaxIdleConnsPerHost
+        # is 2, so once a burst of concurrent chunk GETs finishes, all
+        # but 2 connections to Tigris go straight to TIME_WAIT. The
+        # next burst pays a TLS handshake on every new conn. 5m keeps
+        # the conns we DO have alive across consecutive correlate
+        # sub-query batches in the same session, partially mitigating
+        # the handshake tax. The proper fix is migrating to
+        # use_thanos_objstore: true (exposes max-idle-connections-
+        # per-host); tracked separately.
+        idle_conn_timeout: 5m
   replication_factor: 1
   ring:
     kvstore:
@@ -61,16 +73,19 @@ limits_config:
   max_entries_limit_per_query: 50000
   allow_structured_metadata: true
   discover_service_name: []
-  # Query parallelism. The Loki container runs on 4 vCPU and was sitting
-  # near-idle on CPU with ~8GB RAM used during cold queries — work was
-  # serialized at querier.max_concurrent (see below). Smaller split
-  # interval (default 30m → 10m) creates more sub-queries per range query
-  # so the bumped concurrency is actually consumed. Chunks are now S3-
-  # only, so chunk fetches are non-blocking HTTP and don't pin OS threads
-  # — values back to PR #6 levels.
+  # Query parallelism. After fieldy-observe #19 dropped the mobile body-
+  # grep sweep, `correlate user` only issues one Loki query per call, but
+  # sub-queries still serialize at querier.max_concurrent. With max_
+  # concurrent=32 a 24h range (144 sub-queries from split=10m) needs ~5
+  # rounds, and Loki query log showed sub-queries spending 8-11s in
+  # queue_time while the container sat near-idle on CPU/RAM. Bump the
+  # whole stack so the frontend is allowed to fan out, and the queriers
+  # are allowed to actually serve in parallel. Safe at these levels
+  # because chunks are S3-only — fetches are non-blocking HTTP, no OS-
+  # thread pin risk like the 2026-04-20 incident.
   split_queries_by_interval: 10m
-  max_query_parallelism: 64           # default 32
-  tsdb_max_query_parallelism: 256     # default 128
+  max_query_parallelism: 256          # default 32
+  tsdb_max_query_parallelism: 1024    # default 128
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -112,8 +127,13 @@ pattern_ingester:
 
 querier:
   # Default is 10. With chunks S3-only, chunk fetches are non-blocking
-  # HTTP and don't pin OS threads — back to PR #6 level.
-  max_concurrent: 32
+  # HTTP and don't pin OS threads. Was 32; bumped to 128 because the
+  # query log showed sub-queries queueing 8-11s while CPU/RAM sat idle.
+  # Peak in-flight S3 GETs is bounded by this value; Tigris handles
+  # 100s/sec comfortably so 128 concurrent is well clear of any rate
+  # limit. Goroutine count goes up but Go scheduler is fine — the OS-
+  # thread cap from the filesystem-chunk era no longer applies.
+  max_concurrent: 128
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
