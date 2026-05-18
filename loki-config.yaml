@@ -28,35 +28,47 @@ common:
   path_prefix: /loki
   storage:
     # Default backend (Tigris — Railway's S3-compatible bucket service).
-    # Non-blocking HTTP I/O so query parallelism doesn't pin OS threads the
-    # way filesystem reads did. Credentials and endpoint resolved from
-    # Railway env vars set on the Loki service ($S3_BUCKET, $S3_ENDPOINT,
-    # $S3_ACCESS_KEY, $S3_SECRET_KEY) — all reference the "Loki Bucket"
-    # plugin.
-    s3:
-      endpoint: ${S3_ENDPOINT}
-      bucketnames: ${S3_BUCKET}
-      access_key_id: ${S3_ACCESS_KEY}
-      secret_access_key: ${S3_SECRET_KEY}
-      region: auto
-      s3forcepathstyle: true
-      insecure: false
-      http_config:
-        # Default is 1m30s. Loki's legacy S3 client uses Go's
-        # http.Transport defaults under the hood — MaxIdleConnsPerHost
-        # is 2, so once a burst of concurrent chunk GETs finishes, all
-        # but 2 connections to Tigris go straight to TIME_WAIT. The
-        # next burst pays a TLS handshake on every new conn. 5m keeps
-        # the conns we DO have alive across consecutive correlate
-        # sub-query batches in the same session, partially mitigating
-        # the handshake tax. The proper fix is migrating to
-        # use_thanos_objstore: true (exposes max-idle-connections-
-        # per-host); tracked separately. Zero memory cost.
-        idle_conn_timeout: 5m
+    # Migrated from the legacy `s3:` block to the Thanos objstore client
+    # (`storage_config.use_thanos_objstore: true` below). Thanos defaults
+    # max_idle_connections_per_host to 100 vs the legacy AWS SDK client
+    # which inherits Go's http.Transport default of 2 — under concurrent
+    # chunk GETs that meant constant TLS handshakes for connections past
+    # the cap. Credentials/endpoint still resolved from Railway env vars
+    # set on the Loki service ($S3_BUCKET, $S3_ENDPOINT, $S3_ACCESS_KEY,
+    # $S3_SECRET_KEY) — all reference the "Loki Bucket" plugin.
+    #
+    # Key renames vs legacy:
+    #   bucketnames           → bucket_name (Thanos supports only one bucket)
+    #   s3forcepathstyle:true → bucket_lookup_type: path (Tigris is path-style)
+    #   http_config           → http
+    object_store:
+      s3:
+        endpoint: ${S3_ENDPOINT}
+        bucket_name: ${S3_BUCKET}
+        access_key_id: ${S3_ACCESS_KEY}
+        secret_access_key: ${S3_SECRET_KEY}
+        region: auto
+        bucket_lookup_type: path
+        insecure: false
+        http:
+          # Default is 1m30s. 5m keeps connections alive across consecutive
+          # correlate sub-query batches in the same session. The Thanos
+          # client defaults max_idle_connections / max_idle_connections_per_host
+          # to 100, which fits our max_concurrent=64 querier budget — no
+          # explicit override needed.
+          idle_conn_timeout: 5m
   replication_factor: 1
   ring:
     kvstore:
       store: inmemory
+
+storage_config:
+  # Opt into the Thanos objstore client (Loki 3.4+, will become default in a
+  # future release). Replaces the legacy AWS SDK S3 client that has the
+  # MaxIdleConnsPerHost=2 problem documented in the common.storage.object_store
+  # block above. Same bucket, same objects, same chunk format — purely a
+  # client library swap. Rollback is `git revert` + redeploy.
+  use_thanos_objstore: true
 
 query_range:
   # cache_results defaults to false, which means the embedded results_cache
@@ -69,9 +81,11 @@ query_range:
     cache:
       embedded_cache:
         enabled: true
-        # Default is ~1GB. Was capped at 100MB which made eviction
-        # aggressive on a workload with many distinct queries.
-        max_size_mb: 1024
+        # Default is ~1GB. Was 100MB → 1024MB → 4096MB. 4GB cuts cold
+        # sub-query rate on dashboard reloads; cheap memory win at 32GB
+        # container size (well within the headroom of max_concurrent=64 ×
+        # ~250MB peak = ~16GB query budget + ~12GB other = ~28GB used).
+        max_size_mb: 4096
 
 limits_config:
   # 60-day retention. Compactor below actually enforces it (the previous
@@ -112,11 +126,12 @@ limits_config:
   # for Grafana Logs panel coloring.
   discover_log_levels: true
   reject_old_samples: false
-  # Per-sub-query timeout (default 1m). At split=30m a single sub-query has
-  # to chew through more chunks; 3m lets cold filesystem-backed sub-queries
-  # complete without failing. Bounded by max_concurrent below so blocked
-  # goroutines can't accumulate past the OS thread cap.
-  query_timeout: 3m
+  # Per-sub-query timeout (default 1m). Acts as a hang detector — at
+  # split=10m a healthy sub-query finishes in seconds; values >>1m mean a
+  # stuck S3 fetch or ring partition. 5m gives slow but legitimate cold
+  # sub-queries room to finish without prompting client retries (each
+  # retry amplifies storm scenarios — see 2026-05-18 OOM incident).
+  query_timeout: 5m
 
 schema_config:
   configs:
@@ -180,6 +195,21 @@ compactor:
 
 frontend:
   encoding: protobuf
+  # Default 2048. With max_query_parallelism=256 and tsdb_max_query_parallelism
+  # =1024, a single 7d range query can fan out to 1008 sub-queries; several
+  # concurrent wide-window queries can saturate the default queue and get
+  # 429'd. Bumping to 8192 lets legitimate large queries queue without
+  # rejection — queued sub-query state is KBs each, so memory cost is
+  # negligible (8192 × ~KB ≈ ~10MB).
+  max_outstanding_per_tenant: 8192
+
+query_engine:
+  # Opt into the new (LQE) query engine introduced in Loki 3.7. Safe to
+  # enable: queries the new engine doesn't yet support fall back to the
+  # legacy engine automatically. Upside grows as engine coverage grows
+  # across point releases. No-op for the OOM-triggering metadata-sweep
+  # queries today, but free perf on whatever it does support.
+  enable: true
 
 # By default, Loki will send anonymous, but uniquely-identifiable usage and configuration
 # analytics to Grafana Labs. These statistics are sent to https://stats.grafana.org/
