@@ -81,11 +81,12 @@ query_range:
     cache:
       embedded_cache:
         enabled: true
-        # Default is ~1GB. Was 100MB → 1024MB → 4096MB. 4GB cuts cold
-        # sub-query rate on dashboard reloads; cheap memory win at 32GB
-        # container size (well within the headroom of max_concurrent=64 ×
-        # ~250MB peak = ~16GB query budget + ~12GB other = ~28GB used).
-        max_size_mb: 4096
+        # Default is ~1GB. Was 100MB → 1024MB → 4096MB → 8192MB. 8GB cuts
+        # cold sub-query rate on dashboard reloads. Cheap at 64GB container
+        # size: today's 20-query 7d storm test peaked at 5GB query memory,
+        # so query workload + 8GB cache + ~10GB baseline ≈ ~23GB total
+        # under heavy load — comfortable inside the 64GB ceiling.
+        max_size_mb: 8192
 
 limits_config:
   # 60-day retention. Compactor below actually enforces it (the previous
@@ -150,15 +151,18 @@ pattern_ingester:
   enabled: true
 
 querier:
-  # Default is 10. With chunks S3-only, chunk fetches are non-blocking
-  # HTTP and don't pin OS threads. Was 32; #11 jumped to 128 and OOMed
-  # the 32 GB container — each in-flight metadata-sweep sub-query holds
-  # ~150-250 MB of decoded chunks + structured metadata, so 128 ×
-  # ~200 MB ≈ 25 GB peak query memory + baseline blew past the limit.
-  # 64 is the safe halfway: query log showed queue_time of 8-11s at
-  # max_concurrent=32, this cuts it ~in half while staying well clear
-  # of OOM (64 × ~200 MB ≈ 13 GB peak in 32 GB container).
-  max_concurrent: 64
+  # Default is 10. History: 32 → 128 (#11, OOM on 32GB) → 64 (#13, safe).
+  # 2026-05-19: with Thanos objstore live (PR #15) the conn-pool starvation
+  # that drove the OOM is gone, per-sub-query memory peak dropped from
+  # the ~200-250 MB estimate to ~75 MB measured (20-query 7d storm peaked
+  # at 5GB total = ~78MB/slot). At max_concurrent=64 the same storm took
+  # 23s for 20,160 sub-queries — 73ms/batch × 315 batches. max_concurrent
+  # is now the throughput bound, not memory. Bumping to 96 cuts batches
+  # to 210 (~33% wall-time reduction on multi-query workloads) and stays
+  # at 3× vCPU oversubscription (32 vCPU), well inside the safe envelope
+  # for mostly-I/O-bound S3-fetched chunks. Peak memory: 96 × ~78MB ≈
+  # 7.5 GB — trivial in the 64GB container.
+  max_concurrent: 96
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
