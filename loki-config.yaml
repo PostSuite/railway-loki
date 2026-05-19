@@ -213,29 +213,31 @@ frontend:
   max_outstanding_per_tenant: 8192
 
 query_engine:
-  # Re-enabled 2026-05-19 after PR #18 (which disabled it) caused a 19×
-  # query latency regression and memory climbing to 86% of the 64GB
-  # ceiling. Lesson learned: the v2 engine's 500s on *log.NoopLabelFilter
-  # were not a bug — they were a *safety valve* refusing to execute
-  # catastrophically expensive dashboard queries. The offending pattern:
+  # DISABLED again 2026-05-19. v2 engine in Loki 3.7 reads from dataobj
+  # columnar storage — but the dataobj writer pipeline is part of the
+  # new Kafka-backed ingestion architecture which single-binary Loki on
+  # Railway does not run. Result: v2 reads from an incomplete/stale
+  # dataobj store and returns truncated query results (observed cutoff
+  # at ~13:07 local while real ingestion was current). Grafana panels
+  # showed stale data with the banner "Query executed using the new
+  # experimental query engine and dataobj storage".
   #
-  #   {service=~"fieldy-(core|app|agent)-.*"}
-  #     | severity_text=~"ERROR|CRITICAL|FATAL" |= ""
-  #     | user_id=~`.*.*` | request_id=~`.*.*` | trace_id=~`.*.*` |~ ""
+  # History on this knob:
+  #   PR #15 (enable)  — opt-in, "falls back to legacy" claim;
+  #   PR #18 (disable) — fixed 500s on NoopLabelFilter; caused 19× legacy
+  #                      overload because dashboards had no-op `.*.*`
+  #                      filters that legacy fully executed at ~414MB
+  #                      structured metadata per sub-query;
+  #   PR #19 (enable)  — emergency revert of #18 to stop the overload;
+  #   THIS PR (disable) — safe now that the offending dashboard panels
+  #                       have been cleaned up (no more `.*.*` regex
+  #                       filters), so legacy executing these queries
+  #                       is no longer catastrophic. Correctness >>
+  #                       the ~5-15% speed cost.
   #
-  # The no-op regex filters (`.*.*`, `(?i:.*)`) force the *legacy* engine
-  # to scan every structured-metadata entry to evaluate the filter; each
-  # 20m sub-query processed ~414MB of metadata in ~15s. At max_concurrent
-  # =96, parallel execution of these blew memory past 54GB.
-  #
-  # v2's "not implemented" response was actually doing us a favor —
-  # returning fast 500s that Grafana shows as empty panels, instead of
-  # letting legacy execute a query that should never run. ~1.14% failure
-  # rate on dashboards is the cost; system stability is the benefit.
-  #
-  # PROPER FIX: clean up the offending Grafana dashboard panels to drop
-  # the no-op `.*.*` filters. Until then, keep this enabled.
-  enable: true
+  # Re-enable only when Loki ships a single-binary-compatible dataobj
+  # writer, OR when we move to the Kafka-backed ingestion architecture.
+  enable: false
 
 # By default, Loki will send anonymous, but uniquely-identifiable usage and configuration
 # analytics to Grafana Labs. These statistics are sent to https://stats.grafana.org/
