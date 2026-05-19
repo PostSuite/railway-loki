@@ -213,12 +213,21 @@ frontend:
   max_outstanding_per_tenant: 8192
 
 query_engine:
-  # Opt into the new (LQE) query engine introduced in Loki 3.7. Safe to
-  # enable: queries the new engine doesn't yet support fall back to the
-  # legacy engine automatically. Upside grows as engine coverage grows
-  # across point releases. No-op for the OOM-triggering metadata-sweep
-  # queries today, but free perf on whatever it does support.
-  enable: true
+  # DISABLED 2026-05-19. Original opt-in (PR #15) assumed the new LQE
+  # engine in Loki 3.7 falls back to legacy for unsupported query shapes
+  # — it does for many, but NOT for queries containing what the engine
+  # calls *log.NoopLabelFilter. Several Grafana dashboards in production
+  # use regex label filters like `user_id=~\`.*.*\`` and `level=~"(?i:.*)"`
+  # (effectively "match anything") which produce NoopLabelFilter nodes
+  # in the AST. The v2 engine logs:
+  #   err="failed to convert AST into logical plan: not implemented:
+  #        *log.NoopLabelFilter"
+  # and returns 500 to the client instead of falling back. Measured ~1.14%
+  # query_range failure rate (506 in 30m vs 44033 successes) coming from
+  # dashboard panels — silently failing until the Prometheus scrape of
+  # Loki landed and made status codes visible. Re-enable when Loki ships
+  # the fix (track in their issue tracker).
+  enable: false
 
 # By default, Loki will send anonymous, but uniquely-identifiable usage and configuration
 # analytics to Grafana Labs. These statistics are sent to https://stats.grafana.org/
