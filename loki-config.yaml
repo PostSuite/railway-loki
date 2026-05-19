@@ -162,13 +162,18 @@ querier:
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
-  # wall-clock by many hours when a device syncs late. The ingester's accept
-  # window for out-of-order entries is max_chunk_age/2, so 48h gives a 24h
-  # tolerance for delayed mobile sync — covers the worst observed rejection
-  # (~19h stale) with headroom. Default is 2h (= 1h window). Memory cost is
-  # negligible: chunks still flush on chunk_target_size (1.5 MB) and
-  # chunk_idle_period (30m), so max_chunk_age only affects low-rate streams.
-  max_chunk_age: 48h
+  # wall-clock when a device syncs late. The ingester's accept window for
+  # out-of-order entries is max_chunk_age/2, so 96h gives a 48h tolerance.
+  # 2026-05-19: Prometheus scrape of loki revealed steady-state ~0.08 req/s
+  # of 400 rejections from fieldy-mobile streams (single payloads with up
+  # to 5000/5000 entries dropped) — the original "~19h worst observed"
+  # estimate from this comment block has become stale; some payloads carry
+  # entries from days to weeks ago. 96h catches overnight/weekend reconnects
+  # which is the bulk of normal patterns; week-plus stragglers still miss.
+  # Default is 2h (= 1h window). Memory cost remains negligible: chunks
+  # flush on chunk_target_size (1.5 MB) and chunk_idle_period (30m), so
+  # max_chunk_age only extends the upper bound for very-low-rate streams.
+  max_chunk_age: 96h
 
 ruler:
   # Pin ruler files to the filesystem volume explicitly. Was previously
