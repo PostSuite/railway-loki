@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -e
 
 # Default port if Railway doesn't set one
@@ -45,33 +45,34 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-# Start nginx in the background (not exec) so we can supervise it alongside
-# Loki. Previously nginx ran as foreground PID 1 and Loki ran as a background
-# child; when Loki was OOM-killed (signal 9 from the kernel) nginx kept
-# running and Railway considered the container healthy, so every /loki/* call
-# returned 502 indefinitely until someone manually redeployed. Now whichever
-# process exits first takes the whole container down (exit 1) and Railway's
-# ON_FAILURE restart policy in railway.toml brings it back.
+# Start nginx in the background instead of exec'ing it, so we can supervise
+# alongside Loki. Previously nginx ran as foreground PID 1 and Loki ran as a
+# background child; when Loki was OOM-killed (signal 9 from the kernel)
+# nginx kept running, Railway considered the container healthy, and every
+# /loki/* call returned 502 indefinitely until someone manually redeployed.
+# Now whichever process exits first takes the whole container down (exit 1)
+# and Railway's ON_FAILURE restart policy in railway.toml brings it back.
 echo "Starting nginx on port $PORT"
 nginx -g 'daemon off;' &
 NGINX_PID=$!
 
 # Forward termination signals so a clean Railway stop kills both children
-# and exits 0 (no restart loop on intentional shutdowns).
+# and exits 0 (no spurious restart loop on intentional shutdowns).
 trap 'echo "received termination signal"; kill -TERM "$LOKI_PID" "$NGINX_PID" 2>/dev/null || true; wait; exit 0' TERM INT
 
-# Poll both PIDs. `wait -n` would be cleaner but Alpine /bin/sh is BusyBox
-# ash, which doesn't support it. 2s cadence reacts within ~2s of either
-# process dying — fast enough for an OOM-kill loop to converge while cheap
-# enough not to matter.
-while kill -0 "$LOKI_PID" 2>/dev/null && kill -0 "$NGINX_PID" 2>/dev/null; do
-  sleep 2
-done
+# Block until either child exits. `wait -n` requires bash (Alpine's /bin/sh
+# is BusyBox ash, hence the bash shebang and `apk add bash` in Dockerfile);
+# it's event-driven, so we react in milliseconds rather than the seconds a
+# polling loop would cost.
+set +e
+wait -n "$LOKI_PID" "$NGINX_PID"
+EXIT_CODE=$?
+set -e
 
 if ! kill -0 "$LOKI_PID" 2>/dev/null; then
-  echo "ERROR: Loki (pid=$LOKI_PID) exited; exiting so Railway restarts the container"
+  echo "ERROR: Loki (pid=$LOKI_PID) exited with code $EXIT_CODE; killing nginx and exiting so Railway restarts the container"
 else
-  echo "ERROR: nginx (pid=$NGINX_PID) exited; exiting so Railway restarts the container"
+  echo "ERROR: nginx (pid=$NGINX_PID) exited with code $EXIT_CODE; killing Loki and exiting so Railway restarts the container"
 fi
 
 kill -TERM "$LOKI_PID" "$NGINX_PID" 2>/dev/null || true
