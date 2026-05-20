@@ -14,14 +14,17 @@ fi
 # Render nginx config with env vars
 envsubst '${PORT} ${AUTH_TOKEN}' < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf
 
-# querier.max_concurrent is parameterised so we can re-tune the
-# concurrency-vs-memory point from the Railway dashboard without a redeploy.
-# 86 is the default chosen 2026-05-20 after the chunk_cache OOM (see the
-# inline comment in loki-config.yaml). Setting LOKI_QUERIER_MAX_CONCURRENT
-# on the Railway service overrides this.
-LOKI_QUERIER_MAX_CONCURRENT="${LOKI_QUERIER_MAX_CONCURRENT:-86}"
-export LOKI_QUERIER_MAX_CONCURRENT
-echo "querier.max_concurrent = $LOKI_QUERIER_MAX_CONCURRENT"
+# Concurrency / parallelism knobs are parameterised so we can re-tune
+# the throughput-vs-memory point from the Railway dashboard without a
+# redeploy. See the loki-config.yaml inline comments for the chosen
+# defaults and the math behind them.
+LOKI_QUERIER_MAX_CONCURRENT="${LOKI_QUERIER_MAX_CONCURRENT:-64}"
+LOKI_MAX_QUERY_PARALLELISM="${LOKI_MAX_QUERY_PARALLELISM:-64}"
+LOKI_TSDB_MAX_QUERY_PARALLELISM="${LOKI_TSDB_MAX_QUERY_PARALLELISM:-256}"
+export LOKI_QUERIER_MAX_CONCURRENT LOKI_MAX_QUERY_PARALLELISM LOKI_TSDB_MAX_QUERY_PARALLELISM
+echo "querier.max_concurrent          = $LOKI_QUERIER_MAX_CONCURRENT"
+echo "max_query_parallelism           = $LOKI_MAX_QUERY_PARALLELISM"
+echo "tsdb_max_query_parallelism      = $LOKI_TSDB_MAX_QUERY_PARALLELISM"
 
 # Strip the protocol scheme from S3_ENDPOINT. Railway populates the bucket
 # variable as a full URL (e.g. `https://t3.storageapi.dev`) but Loki's S3
