@@ -75,25 +75,25 @@ storage_config:
   # `cache_location` (filesystem) and that path is sufficient. So we add a
   # chunk cache below but NOT an index cache.
 
-chunk_store_config:
-  # Embedded in-process chunk cache. Without this block configured, every
-  # query that touches a chunk not currently held in a queryable in-memory
-  # ingester path hits Tigris (S3) directly. Observed effect on 2026-05-19:
-  # `loki_logql_querystats_chunk_download_latency_seconds` p95 = 57s with
-  # 96/96 querier slots permanently saturated waiting on chunk fetches —
-  # incoming query rate (~6.7 req/s) exceeds throughput ceiling
-  # (96 / 30s ≈ 3.2 q/s) so the frontend queue grows and Go heap balloons.
-  # 8GB mirrors `query_range.results_cache` — at default chunk_target_size
-  # 1.5 MB that's room for ~5k chunks, enough to keep the dashboard hot set
-  # warm across the ~6h auto-refresh windows. Memcached would be the proper
-  # tier but adds a Railway service; embedded keeps single-binary intact.
-  # Memory budget at 64GB container:
-  #   baseline ~5GB + results_cache 8GB + chunk_cache 8GB + 96-slot peak
-  #   ~10GB ≈ 31GB. Leaves ~30GB headroom for cold spikes.
-  chunk_cache_config:
-    embedded_cache:
-      enabled: true
-      max_size_mb: 8192
+# Embedded chunk cache REMOVED 2026-05-20 — the 8 GB embedded chunk cache
+# added the previous day caused an OOM at 11:30 UTC. Mechanism: workers
+# decompress ~250 MB chunks into heap, the cache copies for storage, then
+# evicts an old entry. During a cold workload (cache full of unrelated
+# chunks, e.g. AskFieldy correlate-user body grep sweeping through new
+# chunks) every insert triple-buffers ~750 MB per slot. At 96 concurrent
+# workers all doing this against a full cache, Go GC fell ~15 GB behind
+# and the container blew past its 64 GB ceiling. Observed hit rate on
+# the ad-hoc query workload that triggered the incident: 1.6% — chunk
+# cache provides almost no value there.
+#
+# What we give up by removing it: dashboards do a first-paint S3 fetch
+# instead of a memory hit (~50–200 ms slower). Auto-refresh and repeat
+# queries are still served by `query_range.results_cache` below, which
+# caches whole query results — a strictly bigger speedup than the
+# chunk cache offered.
+#
+# Proper long-term fix is memcached as a separate Railway service so
+# cache bytes live off the Loki heap. Out of scope for this PR.
 
 query_range:
   # cache_results defaults to false, which means the embedded results_cache

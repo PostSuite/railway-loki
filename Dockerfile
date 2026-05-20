@@ -4,7 +4,7 @@ FROM grafana/loki:latest AS loki
 # Stage 2: Alpine base with shell, nginx, and Loki
 FROM alpine:latest
 
-RUN apk add --no-cache nginx gettext
+RUN apk add --no-cache nginx gettext bash
 
 # Copy Loki binary from official image
 COPY --from=loki /usr/bin/loki /usr/bin/loki

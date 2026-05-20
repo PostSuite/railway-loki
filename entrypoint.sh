@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -e
 
 # Default port if Railway doesn't set one
@@ -29,10 +29,15 @@ fi
 # `-config.expand-env=true` lets the YAML reference Railway env vars via
 # `${VAR}` syntax (used for the S3 credentials/endpoint/bucket).
 /usr/bin/loki -config.file=/etc/loki/loki-config.yaml -config.expand-env=true &
+LOKI_PID=$!
 
 # Wait for Loki to be ready
-echo "Waiting for Loki to start..."
-for i in $(seq 1 30); do
+echo "Waiting for Loki to start (pid=$LOKI_PID)..."
+for i in $(seq 1 60); do
+  if ! kill -0 "$LOKI_PID" 2>/dev/null; then
+    echo "ERROR: Loki exited before becoming ready"
+    exit 1
+  fi
   if wget -q -O /dev/null http://127.0.0.1:3100/ready 2>/dev/null; then
     echo "Loki is ready"
     break
@@ -40,6 +45,38 @@ for i in $(seq 1 30); do
   sleep 1
 done
 
-# Start nginx in the foreground
+# Start nginx in the background instead of exec'ing it, so we can supervise
+# alongside Loki. Previously nginx ran as foreground PID 1 and Loki ran as a
+# background child; when Loki was OOM-killed (signal 9 from the kernel)
+# nginx kept running, Railway considered the container healthy, and every
+# /loki/* call returned 502 indefinitely until someone manually redeployed.
+# Now whichever process exits first takes the whole container down (exit 1)
+# and Railway's ON_FAILURE restart policy in railway.toml brings it back.
 echo "Starting nginx on port $PORT"
-exec nginx -g 'daemon off;'
+nginx -g 'daemon off;' &
+NGINX_PID=$!
+
+# Forward termination signals so a clean Railway stop kills both children
+# and exits 0 (no spurious restart loop on intentional shutdowns).
+trap 'echo "received termination signal"; kill -TERM "$LOKI_PID" "$NGINX_PID" 2>/dev/null || true; wait; exit 0' TERM INT
+
+# Block until either child exits. `wait -n` requires bash (Alpine's /bin/sh
+# is BusyBox ash, hence the bash shebang and `apk add bash` in Dockerfile);
+# it's event-driven, so we react in milliseconds rather than the seconds a
+# polling loop would cost.
+set +e
+wait -n "$LOKI_PID" "$NGINX_PID"
+EXIT_CODE=$?
+set -e
+
+if ! kill -0 "$LOKI_PID" 2>/dev/null; then
+  echo "ERROR: Loki (pid=$LOKI_PID) exited with code $EXIT_CODE; killing nginx and exiting so Railway restarts the container"
+else
+  echo "ERROR: nginx (pid=$NGINX_PID) exited with code $EXIT_CODE; killing Loki and exiting so Railway restarts the container"
+fi
+
+kill -TERM "$LOKI_PID" "$NGINX_PID" 2>/dev/null || true
+sleep 1
+kill -KILL "$LOKI_PID" "$NGINX_PID" 2>/dev/null || true
+
+exit 1
