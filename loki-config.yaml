@@ -176,18 +176,18 @@ pattern_ingester:
   enabled: true
 
 querier:
-  # Default is 10. History: 32 → 128 (#11, OOM on 32GB) → 64 (#13, safe).
-  # 2026-05-19: with Thanos objstore live (PR #15) the conn-pool starvation
-  # that drove the OOM is gone, per-sub-query memory peak dropped from
-  # the ~200-250 MB estimate to ~75 MB measured (20-query 7d storm peaked
-  # at 5GB total = ~78MB/slot). At max_concurrent=64 the same storm took
-  # 23s for 20,160 sub-queries — 73ms/batch × 315 batches. max_concurrent
-  # is now the throughput bound, not memory. Bumping to 96 cuts batches
-  # to 210 (~33% wall-time reduction on multi-query workloads) and stays
-  # at 3× vCPU oversubscription (32 vCPU), well inside the safe envelope
-  # for mostly-I/O-bound S3-fetched chunks. Peak memory: 96 × ~78MB ≈
-  # 7.5 GB — trivial in the 64GB container.
-  max_concurrent: 96
+  # Default 10. History: 32 → 128 (#11, OOM on 32GB) → 64 (#13, safe) → 96
+  # (#17). 2026-05-20 storm test at 96 OOMed twice on 5× concurrent 72h
+  # body-grep queries — workers held ~530 MB/slot at peak vs the ~78 MB
+  # estimated above, because mobile correlate sub-queries pull large
+  # structured-metadata blobs that the original estimate didn't model.
+  # Lowered to 86 with a Railway env-var override so we can re-tune from
+  # the dashboard without a redeploy. Math at 86 × 530 MB = ~46 GB worker
+  # heap + 13 GB fixed (results_cache + baseline) = ~59 GB committed,
+  # ~5 GB GC headroom inside the 64 GB container. GOMEMLIMIT=58GiB on the
+  # service is the backstop if peaks exceed that. Entrypoint defaults to
+  # 86 if LOKI_QUERIER_MAX_CONCURRENT is unset.
+  max_concurrent: ${LOKI_QUERIER_MAX_CONCURRENT}
 
 ingester:
   # Mobile log uploads arrive with capture-time timestamps that can lag
