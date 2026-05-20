@@ -121,20 +121,32 @@ limits_config:
   max_entries_limit_per_query: 50000
   allow_structured_metadata: true
   discover_service_name: []
-  # Frontend fan-out caps. These bound the queue depth the query
-  # frontend will produce per range query — they do NOT control
-  # concurrent execution (that's querier.max_concurrent below) and do
-  # NOT participate in the memory pressure that OOMed PR #11. Queued
-  # sub-query state is KBs each; completed results buffered for merge
-  # are ~3 KB each (the Wds9iTu 24h correlate JSON output was 417 KB
-  # across 144 sub-queries). tsdb_max_query_parallelism=256 was
-  # actively constraining 7d range queries (1008 sub-queries → 4
-  # sequential frontend rounds at the previous cap); 1024 lets them
-  # queue all at once. max_query_parallelism is the per-tenant cap;
-  # uniform with the tsdb knob.
+  # Per-query parallelism caps. These bound how many sub-queries one
+  # query can fan out at the frontend; `querier.max_concurrent` below is
+  # the global execution cap that ultimately gates how many run at once.
+  #
+  # 2026-05-20: the values these revert FROM (256 / 1024, set in PR #11)
+  # let a single wide query monopolize all worker slots at the then-bumped
+  # `max_concurrent: 128`. Combined with `max_concurrent` walking back to
+  # 86 but these knobs staying at the bump, normal mixed dashboard +
+  # correlate traffic was pushing committed memory past 54 GB and tripping
+  # GOMEMLIMIT's GC brake (the "Loki chokes" symptom). Loki docs label
+  # these as the per-request fan-out cap; restoring them to roughly
+  # default × 2 sizing matches the resource footprint (64 GB / 32 vCPU
+  # container).
+  #
+  # `max_query_parallelism: 64` — at our `max_concurrent: 64` (also
+  # env-tunable below), one query CAN use every slot when nothing else is
+  # competing → fast interactive correlate; with multi-query load the
+  # global cap fair-shares between queries naturally.
+  #
+  # `tsdb_max_query_parallelism: 256` — purely a frontend dispatch cap;
+  # the queue is KB-sized per sub-query, so 256 just lets a 7d query
+  # queue all its sub-queries in fewer frontend rounds. No memory cost
+  # because `max_concurrent` still gates execution.
   split_queries_by_interval: 10m
-  max_query_parallelism: 256          # default 32
-  tsdb_max_query_parallelism: 1024    # default 128
+  max_query_parallelism: ${LOKI_MAX_QUERY_PARALLELISM}             # default 64
+  tsdb_max_query_parallelism: ${LOKI_TSDB_MAX_QUERY_PARALLELISM}   # default 256
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -176,17 +188,27 @@ pattern_ingester:
   enabled: true
 
 querier:
-  # Default 10. History: 32 → 128 (#11, OOM on 32GB) → 64 (#13, safe) → 96
-  # (#17). 2026-05-20 storm test at 96 OOMed twice on 5× concurrent 72h
-  # body-grep queries — workers held ~530 MB/slot at peak vs the ~78 MB
-  # estimated above, because mobile correlate sub-queries pull large
-  # structured-metadata blobs that the original estimate didn't model.
-  # Lowered to 86 with a Railway env-var override so we can re-tune from
-  # the dashboard without a redeploy. Math at 86 × 530 MB = ~46 GB worker
-  # heap + 13 GB fixed (results_cache + baseline) = ~59 GB committed,
-  # ~5 GB GC headroom inside the 64 GB container. GOMEMLIMIT=58GiB on the
-  # service is the backstop if peaks exceed that. Entrypoint defaults to
-  # 86 if LOKI_QUERIER_MAX_CONCURRENT is unset.
+  # Default 10; Loki docs recommend ~16 for TSDB single-binary on
+  # standard hardware. History: 32 → 128 (#11, OOM) → 64 (#13) → 96
+  # (#17) → 86 (#23) → 64 (this PR).
+  #
+  # Why 64 lands here: at 86 the storm and normal-but-concurrent
+  # dashboard+correlate traffic was pushing committed heap past 54 GB
+  # and tripping GOMEMLIMIT's GC brake. Workers held ~450-530 MB/slot
+  # under realistic load (much higher than the original ~78 MB estimate
+  # because of structured-metadata fetches). Math at 64:
+  #
+  #   workers       64 × ~450 MB ≈ 29 GB
+  #   results_cache              ≈  8 GB
+  #   baseline                   ≈  5 GB
+  #   committed peak             ≈ 42 GB
+  #   GC headroom in 64 GB       ≈ 22 GB
+  #   GOMEMLIMIT (58 GiB ≈ 62 GB) margin ≈ 20 GB
+  #
+  # Sized at ~4× the Loki-recommended 16 because the container is ~4×
+  # the typical single-binary recipe (64 GB / 32 vCPU vs the docs'
+  # ~16 GB / 8 vCPU). Entrypoint defaults to 64 if
+  # LOKI_QUERIER_MAX_CONCURRENT is unset.
   max_concurrent: ${LOKI_QUERIER_MAX_CONCURRENT}
 
 ingester:
