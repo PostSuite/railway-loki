@@ -21,6 +21,7 @@ envsubst '${PORT} ${AUTH_TOKEN}' < /etc/nginx/nginx.conf.template > /etc/nginx/n
 # on the Railway service overrides this.
 LOKI_QUERIER_MAX_CONCURRENT="${LOKI_QUERIER_MAX_CONCURRENT:-86}"
 export LOKI_QUERIER_MAX_CONCURRENT
+echo "querier.max_concurrent = $LOKI_QUERIER_MAX_CONCURRENT"
 
 # Strip the protocol scheme from S3_ENDPOINT. Railway populates the bucket
 # variable as a full URL (e.g. `https://t3.storageapi.dev`) but Loki's S3
