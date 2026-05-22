@@ -166,10 +166,13 @@ limits_config:
   reject_old_samples: false
   # Per-sub-query timeout (default 1m). Acts as a hang detector — at
   # split=10m a healthy sub-query finishes in seconds; values >>1m mean a
-  # stuck S3 fetch or ring partition. 5m gives slow but legitimate cold
-  # sub-queries room to finish without prompting client retries (each
-  # retry amplifies storm scenarios — see 2026-05-18 OOM incident).
-  query_timeout: 5m
+  # stuck S3 fetch or ring partition. Env-tunable; entrypoint defaults to
+  # 3m, which aligns with AskFieldy's client-side cancellation: once the
+  # client gives up there's no point letting an orphaned sub-query keep
+  # holding a worker slot. Was 5m previously — too long given the
+  # congestion-collapse pattern from 2026-05-22 where orphaned sub-queries
+  # held memory while clients retried, piling pressure on top.
+  query_timeout: ${LOKI_QUERY_TIMEOUT}
 
 schema_config:
   configs:

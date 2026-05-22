@@ -21,10 +21,12 @@ envsubst '${PORT} ${AUTH_TOKEN}' < /etc/nginx/nginx.conf.template > /etc/nginx/n
 LOKI_QUERIER_MAX_CONCURRENT="${LOKI_QUERIER_MAX_CONCURRENT:-64}"
 LOKI_MAX_QUERY_PARALLELISM="${LOKI_MAX_QUERY_PARALLELISM:-64}"
 LOKI_TSDB_MAX_QUERY_PARALLELISM="${LOKI_TSDB_MAX_QUERY_PARALLELISM:-256}"
-export LOKI_QUERIER_MAX_CONCURRENT LOKI_MAX_QUERY_PARALLELISM LOKI_TSDB_MAX_QUERY_PARALLELISM
+LOKI_QUERY_TIMEOUT="${LOKI_QUERY_TIMEOUT:-3m}"
+export LOKI_QUERIER_MAX_CONCURRENT LOKI_MAX_QUERY_PARALLELISM LOKI_TSDB_MAX_QUERY_PARALLELISM LOKI_QUERY_TIMEOUT
 echo "querier.max_concurrent          = $LOKI_QUERIER_MAX_CONCURRENT"
 echo "max_query_parallelism           = $LOKI_MAX_QUERY_PARALLELISM"
 echo "tsdb_max_query_parallelism      = $LOKI_TSDB_MAX_QUERY_PARALLELISM"
+echo "query_timeout                   = $LOKI_QUERY_TIMEOUT"
 
 # Strip the protocol scheme from S3_ENDPOINT. Railway populates the bucket
 # variable as a full URL (e.g. `https://t3.storageapi.dev`) but Loki's S3
