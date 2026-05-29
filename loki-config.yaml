@@ -121,6 +121,13 @@ limits_config:
   max_entries_limit_per_query: 50000
   allow_structured_metadata: true
   discover_service_name: []
+  # Truncate log lines that exceed max_line_size instead of rejecting the
+  # whole entry (`line_too_long` → 400, the sample is discarded). The desktop
+  # OTLP relay occasionally emits a >256KB line (giant stacktrace / attribute);
+  # without truncation that entry is dropped silently. 256KB is the Loki
+  # default — stated explicitly so the truncate behavior is self-documenting.
+  max_line_size: 256KB
+  max_line_size_truncate: true
   # Per-query parallelism caps. These bound how many sub-queries one
   # query can fan out at the frontend; `querier.max_concurrent` below is
   # the global execution cap that ultimately gates how many run at once.
