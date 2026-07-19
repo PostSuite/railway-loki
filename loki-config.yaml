@@ -154,6 +154,27 @@ limits_config:
   split_queries_by_interval: 10m
   max_query_parallelism: ${LOKI_MAX_QUERY_PARALLELISM}             # default 64
   tsdb_max_query_parallelism: ${LOKI_TSDB_MAX_QUERY_PARALLELISM}   # default 256
+  # Pre-execution cost caps — the actual "never OOM" guardrail. Loki estimates
+  # a query's data volume from TSDB index stats BEFORE running it and rejects
+  # with a 400 ("query would read too many bytes") instead of executing until
+  # the kernel OOM-kills the process. Both were previously unset:
+  # max_query_bytes_read defaults to 0 (disabled) and max_querier_bytes_read
+  # to 150GB — 2.5× the whole container. Every OOM kill in the 2026-07-15..18
+  # window was an unbounded sweep (`{service=~".+"} | user_id=...` catch-all
+  # correlate, `{service="fieldy-mobile"} |= "..."` body grep) where each 10m
+  # split read ~0.5GB; a multi-day window fans that out to hundreds of splits.
+  #
+  # Sizing: observed sub-query volume is ~0.5GB per 10m split of the full
+  # firehose (~70GB/day all services). 200GB per query allows ~2-3 days of
+  # match-all or ~a week of a single heavy service; 8GB per split is ~16× the
+  # observed worst case, so it only trips on pathological index estimates.
+  # Rejected queries need a --service filter or a narrower window (enforced
+  # client-side by fieldy-observe).
+  max_query_bytes_read: ${LOKI_MAX_QUERY_BYTES_READ}               # default 200GB
+  max_querier_bytes_read: ${LOKI_MAX_QUERIER_BYTES_READ}           # default 8GB
+  # Hard ceiling on query time range. Default is 721h (~30d); make it explicit
+  # and match the 60d retention so a filtered 60d query is still possible.
+  max_query_length: 1441h
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -217,8 +238,17 @@ querier:
   #
   # Sized at ~4× the Loki-recommended 16 because the container is ~4×
   # the typical single-binary recipe (64 GB / 32 vCPU vs the docs'
-  # ~16 GB / 8 vCPU). Entrypoint defaults to 64 if
-  # LOKI_QUERIER_MAX_CONCURRENT is unset.
+  # ~16 GB / 8 vCPU).
+  #
+  # 2026-07-19: entrypoint default lowered 64 → 48 (and the Railway env
+  # override of 70 removed). The 07-15..18 OOM kills happened with 70
+  # workers: at the observed ~0.5-0.6GB working set per catch-all
+  # sub-query, 70 × 0.6GB ≈ 42GB of query heap alone left no headroom
+  # for cache + ingester + GC slack inside the 64GB (59.6GiB) container.
+  # 48 × 0.6GB ≈ 29GB puts committed peak back around ~42GB with the
+  # same math as the block above. The per-query byte caps in
+  # limits_config are the primary guardrail; this is the belt to their
+  # suspenders.
   max_concurrent: ${LOKI_QUERIER_MAX_CONCURRENT}
 
 ingester:
@@ -235,6 +265,13 @@ ingester:
   # flush on chunk_target_size (1.5 MB) and chunk_idle_period (30m), so
   # max_chunk_age only extends the upper bound for very-low-rate streams.
   max_chunk_age: 96h
+  wal:
+    # Backpressure ceiling for WAL replay after a crash. Default is 4GB;
+    # stated explicitly because post-OOM restarts are exactly when we replay,
+    # and the 2026-07-17 crash loops (4 kills in 11 min) were restarts dying
+    # while clients re-slammed the fresh instance mid-replay. Above the
+    # ceiling the replay flushes to storage instead of buffering in heap.
+    replay_memory_ceiling: 4GB
 
 ruler:
   # Pin ruler files to the filesystem volume explicitly. Was previously
