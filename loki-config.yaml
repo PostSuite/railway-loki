@@ -118,7 +118,12 @@ limits_config:
   # value of 168h was set on limits_config but `compactor.retention_enabled`
   # was unset, so retention was advertised but never deleted anything).
   retention_period: 1440h
-  max_entries_limit_per_query: 50000
+  # 50000 → 10000. The byte caps below are NOT enforced on filter-less
+  # label-only queries (Loki's "limited" query path skips them), so the
+  # entries cap is the only cost bound there: 50000 × 256KB max lines was a
+  # ~12.8GB worst case per query. fieldy-observe requests 5000, Grafana
+  # panels 1000.
+  max_entries_limit_per_query: 10000
   allow_structured_metadata: true
   discover_service_name: []
   # Truncate log lines that exceed max_line_size instead of rejecting the
