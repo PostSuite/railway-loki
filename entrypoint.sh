@@ -18,15 +18,19 @@ envsubst '${PORT} ${AUTH_TOKEN}' < /etc/nginx/nginx.conf.template > /etc/nginx/n
 # the throughput-vs-memory point from the Railway dashboard without a
 # redeploy. See the loki-config.yaml inline comments for the chosen
 # defaults and the math behind them.
-LOKI_QUERIER_MAX_CONCURRENT="${LOKI_QUERIER_MAX_CONCURRENT:-64}"
+LOKI_QUERIER_MAX_CONCURRENT="${LOKI_QUERIER_MAX_CONCURRENT:-48}"
 LOKI_MAX_QUERY_PARALLELISM="${LOKI_MAX_QUERY_PARALLELISM:-64}"
 LOKI_TSDB_MAX_QUERY_PARALLELISM="${LOKI_TSDB_MAX_QUERY_PARALLELISM:-256}"
 LOKI_QUERY_TIMEOUT="${LOKI_QUERY_TIMEOUT:-3m}"
-export LOKI_QUERIER_MAX_CONCURRENT LOKI_MAX_QUERY_PARALLELISM LOKI_TSDB_MAX_QUERY_PARALLELISM LOKI_QUERY_TIMEOUT
+LOKI_MAX_QUERY_BYTES_READ="${LOKI_MAX_QUERY_BYTES_READ:-200GB}"
+LOKI_MAX_QUERIER_BYTES_READ="${LOKI_MAX_QUERIER_BYTES_READ:-8GB}"
+export LOKI_QUERIER_MAX_CONCURRENT LOKI_MAX_QUERY_PARALLELISM LOKI_TSDB_MAX_QUERY_PARALLELISM LOKI_QUERY_TIMEOUT LOKI_MAX_QUERY_BYTES_READ LOKI_MAX_QUERIER_BYTES_READ
 echo "querier.max_concurrent          = $LOKI_QUERIER_MAX_CONCURRENT"
 echo "max_query_parallelism           = $LOKI_MAX_QUERY_PARALLELISM"
 echo "tsdb_max_query_parallelism      = $LOKI_TSDB_MAX_QUERY_PARALLELISM"
 echo "query_timeout                   = $LOKI_QUERY_TIMEOUT"
+echo "max_query_bytes_read            = $LOKI_MAX_QUERY_BYTES_READ"
+echo "max_querier_bytes_read          = $LOKI_MAX_QUERIER_BYTES_READ"
 
 # Strip the protocol scheme from S3_ENDPOINT. Railway populates the bucket
 # variable as a full URL (e.g. `https://t3.storageapi.dev`) but Loki's S3
