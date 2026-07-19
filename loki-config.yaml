@@ -154,6 +154,16 @@ limits_config:
   split_queries_by_interval: 10m
   max_query_parallelism: ${LOKI_MAX_QUERY_PARALLELISM}             # default 64
   tsdb_max_query_parallelism: ${LOKI_TSDB_MAX_QUERY_PARALLELISM}   # default 256
+  # THE missing OOM guardrail: max_query_bytes_read defaulted to 0 (disabled),
+  # so catch-all sweeps (`{service=~".+"} | user_id=...`, ~0.5GB per 10m split
+  # × hundreds of splits) executed until the kernel killed the process — every
+  # exit-137 in the 07-15..18 window. With a cap, Loki estimates cost from
+  # index stats and rejects with a 400 before execution. 200GB ≈ 2-3d of
+  # match-all traffic; 8GB/split is ~16× the observed worst case.
+  max_query_bytes_read: ${LOKI_MAX_QUERY_BYTES_READ}               # default 200GB
+  max_querier_bytes_read: ${LOKI_MAX_QUERIER_BYTES_READ}           # default 8GB
+  # Default 721h made explicit and sized to the 60d retention.
+  max_query_length: 1441h
   otlp_config:
     resource_attributes:
       ignore_defaults: true
@@ -217,8 +227,11 @@ querier:
   #
   # Sized at ~4× the Loki-recommended 16 because the container is ~4×
   # the typical single-binary recipe (64 GB / 32 vCPU vs the docs'
-  # ~16 GB / 8 vCPU). Entrypoint defaults to 64 if
-  # LOKI_QUERIER_MAX_CONCURRENT is unset.
+  # ~16 GB / 8 vCPU).
+  #
+  # 2026-07-19: default 64 → 48. The OOM kills ran with an env override
+  # of 70: 70 × ~0.6GB working set ≈ 42GB of query heap alone — no
+  # headroom left. Secondary guard; the byte caps above are primary.
   max_concurrent: ${LOKI_QUERIER_MAX_CONCURRENT}
 
 ingester:
@@ -235,6 +248,10 @@ ingester:
   # flush on chunk_target_size (1.5 MB) and chunk_idle_period (30m), so
   # max_chunk_age only extends the upper bound for very-low-rate streams.
   max_chunk_age: 96h
+  wal:
+    # Default 4GB, pinned: replay runs right after a crash, exactly when
+    # retrying clients re-slam the instance (the 07-17 crash loops).
+    replay_memory_ceiling: 4GB
 
 ruler:
   # Pin ruler files to the filesystem volume explicitly. Was previously
